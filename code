@@ -1,0 +1,92 @@
+import asyncio
+import aiohttp
+
+# --- Configuration for each model ---
+# Replace the placeholder URLs and API keys with the actual endpoints/credentials.
+API_CONFIG = {
+    'chatgpt': {
+        'url': 'https://api.openai.com/v1/engines/chatgpt/completions',
+        'api_key': 'YOUR_OPENAI_API_KEY'
+    },
+    'deepseek': {
+        'url': 'https://api.deepseek.ai/generate',
+        'api_key': 'YOUR_DEEPSEEK_API_KEY'
+    },
+    'grok': {
+        'url': 'https://api.grok.ai/v1/generate',
+        'api_key': 'YOUR_GROK_API_KEY'
+    },
+    'anthropic': {
+        'url': 'https://api.anthropic.com/v1/complete',
+        'api_key': 'YOUR_ANTHROPIC_API_KEY'
+    }
+}
+
+# --- Function to query an individual model ---
+async def query_model(session, model_name, prompt):
+    config = API_CONFIG[model_name]
+    headers = {
+        'Authorization': f'Bearer {config["api_key"]}',
+        'Content-Type': 'application/json'
+    }
+    # Note: The payload structure might need to be adjusted per API.
+    payload = {
+        'prompt': prompt,
+        'max_tokens': 200,
+        'temperature': 0.7,
+    }
+    async with session.post(config['url'], headers=headers, json=payload) as response:
+        result = await response.json()
+        # Extract text; adjust the key based on the actual API response.
+        return result.get('text', '')
+
+# --- Gathering initial answers ---
+async def gather_initial_responses(question):
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for model in API_CONFIG.keys():
+            prompt = f"Question: {question}\nAnswer:"
+            tasks.append(query_model(session, model, prompt))
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        return {model: response for model, response in zip(API_CONFIG.keys(), responses)}
+
+# --- Gathering critiques from each model ---
+async def gather_critiques(responses):
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for model, answer in responses.items():
+            # Build a prompt that includes the other models' answers.
+            other_answers = "\n".join([f"{other}: {resp}" for other, resp in responses.items() if other != model])
+            critique_prompt = (
+                f"Below are answers from various AI models to a complex question:\n{other_answers}\n\n"
+                "Please critique the strengths and weaknesses of each response. "
+                "Provide a concise assessment of which aspects might lead to a more accurate answer."
+            )
+            tasks.append(query_model(session, model, critique_prompt))
+        critiques = await asyncio.gather(*tasks, return_exceptions=True)
+        return {model: critique for model, critique in zip(API_CONFIG.keys(), critiques)}
+
+# --- Aggregating final answer ---
+def aggregate_answers(responses, critiques):
+    aggregated = "Final Aggregated AI Reasoning:\n\n"
+    for model in responses:
+        aggregated += f"--- {model.upper()} ---\n"
+        aggregated += f"Response:\n{responses[model]}\n\n"
+        aggregated += f"Critique on Others:\n{critiques.get(model, 'No critique')}\n\n"
+    # Optionally, you could add logic here that further processes the critiques and answers
+    # (e.g., weighted voting, summarization via one of the models, etc.)
+    return aggregated
+
+# --- Main coordinator function ---
+async def main(question):
+    print("Collecting initial responses from all models...\n")
+    responses = await gather_initial_responses(question)
+    print("Initial responses collected. Now gathering critiques...\n")
+    critiques = await gather_critiques(responses)
+    final_answer = aggregate_answers(responses, critiques)
+    print(final_answer)
+
+if __name__ == '__main__':
+    # Example question – you can change this to any complex or open-ended question.
+    question = "What is the nature of consciousness?"
+    asyncio.run(main(question))
